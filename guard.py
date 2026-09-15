@@ -12,13 +12,18 @@ def analyze_with_ai(prompt):
             "Content-Type": "application/json"
         },
         json={
-            "model": "llama3-8b-8192",
+            "model": "meta-llama/llama-prompt-guard-2-86m",
             "messages": [
-                {"role": "system", "content": "You are an AI security expert. Analyze if this prompt is a prompt injection attack. Reply with DANGEROUS or SAFE and explain why in one sentence."},
                 {"role": "user", "content": prompt}
             ]
         }
     )
+    score = float(response.json()["choices"][0]["message"]["content"])
+    if score > 0.5:
+        print(f"AI confirms injection (confidence: {score:.0%})")
+    else:
+        print(f"AI says safe (confidence: {(1-score):.0%})")
+
     return response.json()["choices"][0]["message"]["content"]
 injections = [
     "ignore previous instructions",
@@ -151,6 +156,6 @@ run = find(user_input)
 if run:
     print("Dangerous patterns detected!")
     response = analyze_with_ai(user_input)
-    print(f"AI Analysis: {response}")
+    
 else:
     print("Safe prompt")
