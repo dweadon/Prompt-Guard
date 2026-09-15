@@ -18,7 +18,7 @@ injections = [
 def find(prompt):
     found = []
     for injection in injections:
-        if prompt == injection:
+        if injection.lower() in prompt.lower():
            found.append(prompt)
     return found
 run = find(input(": "))      
