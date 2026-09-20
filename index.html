@@ -57,6 +57,16 @@
         header svg { color: var(--accent); flex: none; }
         h1 { margin: 0; font-size: 1.75rem; line-height: 1.2; }
         .lede { margin: 8px 0 24px; color: var(--muted); }
+        .notice {
+            margin: -8px 0 24px;
+            padding: 12px 16px;
+            font-size: 0.9375rem;
+            background: var(--warn-bg);
+            border: 1px solid var(--border);
+            border-left: 4px solid var(--warn);
+            border-radius: 8px;
+        }
+        .notice a { color: inherit; }
 
         .card {
             background: var(--card);
@@ -183,6 +193,12 @@
             <h1>Prompt Guard</h1>
         </header>
         <p class="lede">Check a prompt for injection attempts before it reaches your AI.</p>
+        <p id="demoNote" class="notice" hidden>
+            <strong>Demo mode.</strong> This page can't run the AI check, so your prompt is only scanned against the
+            pattern list, right here in your browser. Nothing you type is sent anywhere.
+            <a href="https://github.com/dweadon/Prompt-Guard#website" rel="noopener">Run the full version locally</a>
+            for AI confirmation.
+        </p>
 
         <div class="card">
             <label for="prompt">Prompt</label>
@@ -286,13 +302,54 @@
             result.hidden = false;
         }
 
+        // Static hosts like GitHub Pages can't run server.py. On load, ask the API if it's there:
+        // server.py answers with JSON, a static host answers with a 404 page.
+        // The request carries no prompt, so nothing you type reaches a static host.
+        const apiAvailable = fetch("api/health")
+            .then(res => res.ok && (res.headers.get("Content-Type") || "").startsWith("application/json"))
+            .catch(() => true); // unreachable: let Send() report it
+        apiAvailable.then(available => { document.getElementById("demoNote").hidden = available; });
+
+        const DEMO_DETAIL = "It matched a known pattern. The AI check isn't available in this demo, so this hasn't been confirmed.";
+
+        // Same whole-word, case-insensitive matching as find() in guard.py.
+        function compilePatterns(list) {
+            return list.map(text => {
+                const escaped = text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+                const re = new RegExp("(?:^|[^\\p{L}\\p{N}_])" + escaped + "(?:$|[^\\p{L}\\p{N}_])", "iu");
+                return { text, re };
+            });
+        }
+
+        function findPatterns(compiled, prompt) {
+            return compiled.filter(p => p.re.test(prompt)).map(p => p.text);
+        }
+
+        let compiledPatterns = null;
+
+        async function scanInBrowser(prompt) {
+            if (!compiledPatterns) {
+                const res = await fetch("patterns.json");
+                if (!res.ok) throw new Error("patterns.json: " + res.status);
+                compiledPatterns = compilePatterns(await res.json());
+            }
+            const patterns = findPatterns(compiledPatterns, prompt);
+            if (patterns.length) show("unverified", DEMO_DETAIL, { patterns, score: null });
+            else show("safe", COPY.safe.detail, { patterns, score: null });
+        }
+
         async function Send() {
             const prompt = box.value;
             if (busy || !prompt.trim()) return;
             result.hidden = true;
             setBusy(true);
+            const demo = !(await apiAvailable);
             try {
-                const res = await fetch("/api/check", {
+                if (demo) {
+                    await scanInBrowser(prompt);
+                    return;
+                }
+                const res = await fetch("api/check", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ prompt }),
@@ -306,7 +363,9 @@
                     show(data.verdict, COPY[data.verdict].detail, data);
                 }
             } catch (err) {
-                show("error", "Couldn't reach the server. Start it with \"python3 server.py\" and open http://127.0.0.1:8000.", null);
+                show("error", demo
+                    ? "Couldn't load the pattern list. Try reloading the page."
+                    : "Couldn't reach the server. Start it with \"python3 server.py\" and open http://127.0.0.1:8000.", null);
             } finally {
                 setBusy(false);
             }

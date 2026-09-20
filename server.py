@@ -16,6 +16,8 @@ class Handler(BaseHTTPRequestHandler):
         # Only the page itself is served, never the project folder (it holds .env).
         if self.path in ("/", "/index.html"):
             self.reply(200, INDEX.read_bytes(), "text/html; charset=utf-8")
+        elif self.path == "/api/health":  # lets the page tell this server apart from a static host
+            self.reply_json(200, {"ok": True})
         else:
             self.reply_json(404, {"error": "Not found"})
 
