@@ -1,30 +1,40 @@
+import re
 import requests
 import os
 from dotenv import load_dotenv
 load_dotenv()
 
 api_key = os.getenv("GROQ_API_KEY")
-def analyze_with_ai(prompt):
-    response = requests.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        },
-        json={
-            "model": "meta-llama/llama-prompt-guard-2-86m",
-            "messages": [
-                {"role": "user", "content": prompt}
-            ]
-        }
-    )
-    score = float(response.json()["choices"][0]["message"]["content"])
-    if score > 0.5:
-        print(f"AI confirms injection (confidence: {score:.0%})")
-    else:
-        print(f"AI says safe (confidence: {(1-score):.0%})")
+THRESHOLD = 0.5
 
-    return response.json()["choices"][0]["message"]["content"]
+def analyze_with_ai(prompt):
+    """Return the model's injection score (0-1). Raises RuntimeError if the check fails."""
+    if not api_key:
+        raise RuntimeError("GROQ_API_KEY is not set (add it to your .env file)")
+    try:
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "meta-llama/llama-prompt-guard-2-86m",
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ]
+            },
+            timeout=15
+        )
+        data = response.json()
+    except (requests.RequestException, ValueError):
+        raise RuntimeError("Could not reach the Groq API")
+    if "error" in data:
+        raise RuntimeError(data["error"].get("message", "Groq returned an error"))
+    try:
+        return float(data["choices"][0]["message"]["content"])
+    except (KeyError, IndexError, ValueError):
+        raise RuntimeError("Unexpected response from the Groq API")
 injections = [
     "ignore previous instructions",
     "ignore all previous instructions",
@@ -147,15 +157,38 @@ injections = [
 def find(prompt):
     found = []
     for injection in injections:
-        if injection.lower() in prompt.lower():
-           found.append(prompt)
+        # whole-word match, so "DAN" doesn't fire on "Daniel" or "abundance"
+        if re.search(rf"\b{re.escape(injection)}\b", prompt, re.IGNORECASE):
+            found.append(injection)
     return found
-user_input = input(": ")
-run = find(user_input)
 
-if run:
+def check(prompt):
+    """Scan for known patterns; if any match, ask the AI to confirm. Returns a dict."""
+    result = {"patterns": find(prompt), "score": None, "error": None, "threshold": THRESHOLD}
+    if not result["patterns"]:
+        result["verdict"] = "safe"
+        return result
+    try:
+        result["score"] = analyze_with_ai(prompt)
+    except RuntimeError as e:
+        result["verdict"] = "unverified"
+        result["error"] = str(e)
+        return result
+    result["verdict"] = "injection" if result["score"] > THRESHOLD else "cleared"
+    return result
+
+def main():
+    result = check(input(": "))
+    if result["verdict"] == "safe":
+        print("Safe prompt")
+        return
     print("Dangerous patterns detected!")
-    response = analyze_with_ai(user_input)
-    
-else:
-    print("Safe prompt")
+    if result["verdict"] == "unverified":
+        print(f"AI check failed: {result['error']}")
+    elif result["verdict"] == "injection":
+        print(f"AI confirms injection (confidence: {result['score']:.0%})")
+    else:
+        print(f"AI says safe (confidence: {(1 - result['score']):.0%})")
+
+if __name__ == "__main__":
+    main()
